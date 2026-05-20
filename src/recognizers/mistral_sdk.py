@@ -16,7 +16,7 @@ class MistralSDKClient:
         self.name_to_tool[func.__name__] = func
         self.tools.append(schema)
 
-    def chat(self, user_message, tool_choice="any", parallel_tool_calls=False):
+    def chat(self, user_message, tool_choice="none", parallel_tool_calls=False):
         messages = [{"role": "user", "content": user_message}]
         response = self.client.chat.complete(
             model=self.model,
