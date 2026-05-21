@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.jpg" width="300" />
+  <img src="banner.png" width="600" />
 </p>
 
 # Recognizers
