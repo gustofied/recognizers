@@ -1,5 +1,7 @@
 <p align="center">
   <img src="banner.png" width="600" />
+  <br/>
+  <sub><sup><a href="https://www.youtube.com/watch?v=tjX9Tg8l-w8">Languages and Formal Grammars — Prof Ross</a></sup></sub>
 </p>
 
 # Recognizers
