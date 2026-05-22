@@ -525,3 +525,76 @@ def ir_to_nfa(node: Node) -> NFA:
     nfa.start_state  = frag.start
     nfa.final_states = {frag.end}
     return nfa
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Run
+# ════════════════════════════════════════════════════════════════════
+
+def _check(label: str, got: bool, want: bool) -> None:
+    status = "ok" if got == want else "FAIL"
+    print(f"  [{status}] {label}")
+
+if __name__ == "__main__":
+    from pydantic import BaseModel
+
+    print("\n── Article 1: Schema to Regex ──")
+
+    class User(BaseModel):
+        name: str
+        age: int
+
+    class Data(BaseModel):
+        users: list[User]
+
+    _check("User valid",          matches(User, '{"name": "Ivan", "age": 29}'), True)
+    _check("User missing field",  matches(User, '{"name": "Ivan"}'),            False)
+    _check("Data valid",          matches(Data, '{"users": [{"name": "Ivan", "age": 29}]}'), True)
+    _check("Data wrong type",     matches(Data, '{"users": [{"name": "Ivan", "age": "x"}]}'), False)
+
+    print("\n── Article 2: Regex to IR ──")
+
+    _check("WS is Repeat",     isinstance(regex_to_ir(WS), Repeat),              True)
+    _check("INTEGER has Seq",  isinstance(regex_to_ir(INTEGER_PATTERN), Seq),    True)
+    _check("STRING has Seq",   isinstance(regex_to_ir(STRING_PATTERN), Seq),     True)
+    _check("a|b|c is Alt",     isinstance(regex_to_ir("a|b|c"), Alt),            True)
+
+    print("\n── Article 3: IR to NFA ──")
+
+    nfa_lit = ir_to_nfa(Lit("user"))
+    _check("lit: exact match",   nfa_lit.accepts("user"),  True)
+    _check("lit: prefix",        nfa_lit.accepts("us"),    True)
+    _check("lit: wrong",         nfa_lit.accepts("uses"),  False)
+
+    nfa_alt = ir_to_nfa(Alt((Lit("a"), Lit("c"))))
+    _check("alt: empty prefix",  nfa_alt.accepts(""),   True)
+    _check("alt: a",             nfa_alt.accepts("a"),  True)
+    _check("alt: c",             nfa_alt.accepts("c"),  True)
+    _check("alt: b rejected",    nfa_alt.accepts("b"),  False)
+    _check("alt: ac rejected",   nfa_alt.accepts("ac"), False)
+
+    nfa_int = ir_to_nfa(regex_to_ir(INTEGER_PATTERN))
+    _check("int: 0",     nfa_int.accepts("0"),   True)
+    _check("int: 42",    nfa_int.accepts("42"),  True)
+    _check("int: -7",    nfa_int.accepts("-7"),  True)
+    _check("int: abc",   nfa_int.accepts("abc"), False)
+
+    nfa_ws = ir_to_nfa(regex_to_ir(WS))
+    _check("ws: empty",   nfa_ws.accepts(""),    True)
+    _check("ws: spaces",  nfa_ws.accepts("   "), True)
+
+    print("\n── End-to-end: IR → NFA (primitive patterns) ──")
+
+    nfa_str = ir_to_nfa(regex_to_ir(STRING_PATTERN))
+    _check('string: "hello"',    nfa_str.accepts('"hello"'),   True)
+    _check('string: prefix "hi', nfa_str.accepts('"hi'),       True)
+    _check('string: no quotes',  nfa_str.accepts('hello'),     False)
+
+    nfa_num = ir_to_nfa(regex_to_ir(NUMBER_PATTERN))
+    _check('number: 3.14',   nfa_num.accepts('3.14'),  True)
+    _check('number: -1e10',  nfa_num.accepts('-1e10'), True)
+    _check('number: abc',    nfa_num.accepts('abc'),   False)
+
+    # note: pydantic_to_regex generates lookaheads (?=...) for required fields
+    # which cannot be compiled to an NFA — that limitation is resolved in the
+    # schema-to-automaton route (VPA, no regex intermediate)
