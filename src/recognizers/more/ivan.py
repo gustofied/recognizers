@@ -13,10 +13,6 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 
-# ════════════════════════════════════════════════════════════════════
-#  Article 1 — Schema to Regex
-# ════════════════════════════════════════════════════════════════════
-
 STRING_PATTERN  = r'"([^"\\]|\\.)*"'
 INTEGER_PATTERN = r"-?(0|[1-9][0-9]*)"
 NUMBER_PATTERN  = r"-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?"
@@ -96,10 +92,6 @@ def from_json_schema(schema: dict[str, Any]) -> str:
 def matches(model: type[BaseModel], json_string: str) -> bool:
     return bool(re.fullmatch(pydantic_to_regex(model), json_string))
 
-
-# ════════════════════════════════════════════════════════════════════
-#  Article 2 — Regex to IR
-# ════════════════════════════════════════════════════════════════════
 
 CharClassKind = Literal[
     "DIGIT", "NOT_DIGIT",
@@ -337,10 +329,6 @@ def regex_to_ir(pattern: str) -> Node:
         return parse_term(parts[0])
     return Alt(tuple(parse_term(p) for p in parts))
 
-
-# ════════════════════════════════════════════════════════════════════
-#  Article 3 — IR to NFA
-# ════════════════════════════════════════════════════════════════════
 
 StateId      = int
 StateSet     = set[int]
@@ -595,6 +583,3 @@ if __name__ == "__main__":
     _check('number: -1e10',  nfa_num.accepts('-1e10'), True)
     _check('number: abc',    nfa_num.accepts('abc'),   False)
 
-    # note: pydantic_to_regex generates lookaheads (?=...) for required fields
-    # which cannot be compiled to an NFA — that limitation is resolved in the
-    # schema-to-automaton route (VPA, no regex intermediate)

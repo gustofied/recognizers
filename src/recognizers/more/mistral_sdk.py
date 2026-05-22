@@ -27,9 +27,6 @@ class MistralSDKClient:
         )
         return response
 
-
-# --- tools ---
-
 def count(start_number: int, end_number: int):
     for x in range(start_number, end_number + 1):
         print(f"count: {x}")

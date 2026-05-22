@@ -16,7 +16,6 @@ headers = {
 }
 
 
-# --- tools ---
 
 def lookup_order(order_id: str):
     return {"order_id": order_id, "status": "shipped", "eta": "2026-02-15"}
