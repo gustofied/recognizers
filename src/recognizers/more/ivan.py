@@ -1,5 +1,6 @@
 # inspo: https://ivanleo.com/blog/why-constrained-decoding
 #        https://ivanleo.com/blog/building-our-first-fsm
+#        https://ivanleo.com/blog/compiling-ir-to-nfa-and-dfa
 # Structured Outputs From Scratch — Ivan Leo
 
 from __future__ import annotations
@@ -335,3 +336,192 @@ def regex_to_ir(pattern: str) -> Node:
     if len(parts) == 1:
         return parse_term(parts[0])
     return Alt(tuple(parse_term(p) for p in parts))
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Article 3 — IR to NFA
+# ════════════════════════════════════════════════════════════════════
+
+StateId      = int
+StateSet     = set[int]
+TransitionMap = dict[int, list[tuple[object, int]]]
+EpsilonMap   = dict[int, set[int]]
+
+
+@dataclass(frozen=True, slots=True)
+class Sym:
+    value: str  # single character NFA symbol
+
+# Symbol reuses CharClass from Article 2 for character class transitions
+
+
+def _matches_symbol(symbol: object, char: str) -> bool:
+    if isinstance(symbol, Sym):
+        return symbol.value == char
+    if isinstance(symbol, CharClass):
+        if symbol.kind == "ANY":         return True
+        if symbol.kind == "DIGIT":       return char.isdigit()
+        if symbol.kind == "NOT_DIGIT":   return not char.isdigit()
+        if symbol.kind == "WHITESPACE":  return char.isspace()
+        if symbol.kind == "NOT_WHITESPACE": return not char.isspace()
+        if symbol.kind == "WORD":        return char.isalnum() or char == "_"
+        if symbol.kind == "NOT_WORD":    return not (char.isalnum() or char == "_")
+        if symbol.kind == "BRACKET":
+            expr = f"[^{symbol.pattern}]" if symbol.negated else f"[{symbol.pattern}]"
+            return re.fullmatch(expr, char) is not None
+    raise NotImplementedError(f"Unsupported symbol: {symbol}")
+
+
+@dataclass(frozen=True, slots=True)
+class Fragment:
+    start: int
+    end: int
+
+
+@dataclass(slots=True)
+class NFA:
+    start_state: StateId
+    final_states: StateSet
+    transitions: TransitionMap
+    epsilon: EpsilonMap
+    _next_state: StateId
+
+    def _new_state(self) -> StateId:
+        s = self._next_state
+        self._next_state += 1
+        return s
+
+    def add_transition(self, src: StateId, symbol: object, dst: StateId) -> None:
+        self.transitions.setdefault(src, []).append((symbol, dst))
+
+    def add_epsilon(self, src: StateId, dst: StateId) -> None:
+        self.epsilon.setdefault(src, set()).add(dst)
+
+    def epsilon_closure(self, states: StateSet) -> StateSet:
+        closure = set(states)
+        stack = list(states)
+        while stack:
+            src = stack.pop()
+            for dst in self.epsilon.get(src, set()):
+                if dst not in closure:
+                    closure.add(dst)
+                    stack.append(dst)
+        return closure
+
+    def step(self, states: StateSet, char: str) -> StateSet:
+        if len(char) != 1:
+            raise ValueError("step expects a single character")
+        reached: StateSet = set()
+        for src in self.epsilon_closure(states):
+            for symbol, dst in self.transitions.get(src, []):
+                if _matches_symbol(symbol, char):
+                    reached.add(dst)
+        return self.epsilon_closure(reached)
+
+    def accepts(self, text: str) -> bool:
+        states = self.epsilon_closure({self.start_state})
+        for ch in text:
+            states = self.step(states, ch)
+            if not states:
+                return False
+        return bool(states)
+
+    def _compile_node(self, ir: Node) -> Fragment:
+        if isinstance(ir, Lit):          return self._compile_lit(ir)
+        if isinstance(ir, Alt):          return self._compile_alt(ir)
+        if isinstance(ir, Seq):          return self._compile_seq(ir)
+        if isinstance(ir, CharClass):    return self._compile_char_class(ir)
+        if isinstance(ir, Optional):     return self._compile_optional(ir)
+        if isinstance(ir, Repeat):       return self._compile_repeat(ir)
+        raise NotImplementedError(f"Unsupported IR node: {type(ir)}")
+
+    def _compile_lit(self, lit: Lit) -> Fragment:
+        if lit.text == "":
+            start = end = self._new_state()
+            return Fragment(start, end)
+        prev = self._new_state()
+        start = prev
+        for ch in lit.text:
+            nxt = self._new_state()
+            self.add_transition(prev, Sym(ch), nxt)
+            prev = nxt
+        return Fragment(start, prev)
+
+    def _compile_alt(self, alt: Alt) -> Fragment:
+        start = self._new_state()
+        frags = []
+        for option in alt.options:
+            frag = self._compile_node(option)
+            frags.append(frag)
+            self.add_epsilon(start, frag.start)
+        end = self._new_state()
+        for frag in frags:
+            self.add_epsilon(frag.end, end)
+        return Fragment(start, end)
+
+    def _compile_seq(self, seq: Seq) -> Fragment:
+        if not seq.parts:
+            raise ValueError("Seq must have at least one part")
+        parts = list(seq.parts)
+        first = self._compile_node(parts[0])
+        prev = first
+        for node in parts[1:]:
+            cur = self._compile_node(node)
+            self.add_epsilon(prev.end, cur.start)
+            prev = cur
+        return Fragment(first.start, prev.end)
+
+    def _compile_char_class(self, cc: CharClass) -> Fragment:
+        start = self._new_state()
+        end   = self._new_state()
+        self.add_transition(start, cc, end)
+        return Fragment(start, end)
+
+    def _compile_optional(self, opt: Optional) -> Fragment:
+        start = self._new_state()
+        end   = self._new_state()
+        frag  = self._compile_node(opt.node)
+        self.add_epsilon(start, end)
+        self.add_epsilon(start, frag.start)
+        self.add_epsilon(frag.end, end)
+        return Fragment(start, end)
+
+    def _compile_repeat(self, repeat: Repeat) -> Fragment:
+        start  = self._new_state()
+        cursor = start
+
+        for _ in range(repeat.min_times):
+            frag = self._compile_node(repeat.node)
+            self.add_epsilon(cursor, frag.start)
+            cursor = frag.end
+
+        end = self._new_state()
+
+        if repeat.max_times is None:
+            self.add_epsilon(cursor, end)
+            loop = self._compile_node(repeat.node)
+            self.add_epsilon(cursor, loop.start)
+            self.add_epsilon(loop.end, cursor)
+        else:
+            for _ in range(repeat.max_times - repeat.min_times):
+                self.add_epsilon(cursor, end)
+                frag = self._compile_node(repeat.node)
+                self.add_epsilon(cursor, frag.start)
+                cursor = frag.end
+            self.add_epsilon(cursor, end)
+
+        return Fragment(start, end)
+
+
+def ir_to_nfa(node: Node) -> NFA:
+    nfa = NFA(
+        start_state=0,
+        final_states=set(),
+        transitions={},
+        epsilon={},
+        _next_state=0,
+    )
+    frag = nfa._compile_node(node)
+    nfa.start_state  = frag.start
+    nfa.final_states = {frag.end}
+    return nfa
