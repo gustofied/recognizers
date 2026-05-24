@@ -236,7 +236,7 @@ def _parse_escape_atom_at(pattern: str, index: int) -> tuple[Node, int]:
         "w": "WORD",       "W": "NOT_WORD",
     }
     if esc in kinds:
-        return CharClass(kinds[esc]), index + 2
+        return CharClass(kinds[esc]), index + 2  # ty:ignore[invalid-argument-type]
     return Lit(_decode_escaped_literal(esc)), index + 2
 
 
@@ -468,7 +468,7 @@ class NFA:
     def _compile_optional(self, opt: Optional) -> Fragment:
         start = self._new_state()
         end   = self._new_state()
-        frag  = self._compile_node(opt.node)
+        frag  = self._compile_node(opt.node)  # ty:ignore[invalid-argument-type]
         self.add_epsilon(start, end)
         self.add_epsilon(start, frag.start)
         self.add_epsilon(frag.end, end)
@@ -479,7 +479,7 @@ class NFA:
         cursor = start
 
         for _ in range(repeat.min_times):
-            frag = self._compile_node(repeat.node)
+            frag = self._compile_node(repeat.node)  # ty:ignore[invalid-argument-type]
             self.add_epsilon(cursor, frag.start)
             cursor = frag.end
 
@@ -487,13 +487,13 @@ class NFA:
 
         if repeat.max_times is None:
             self.add_epsilon(cursor, end)
-            loop = self._compile_node(repeat.node)
+            loop = self._compile_node(repeat.node)  # ty:ignore[invalid-argument-type]
             self.add_epsilon(cursor, loop.start)
             self.add_epsilon(loop.end, cursor)
         else:
             for _ in range(repeat.max_times - repeat.min_times):
                 self.add_epsilon(cursor, end)
-                frag = self._compile_node(repeat.node)
+                frag = self._compile_node(repeat.node)  # ty:ignore[invalid-argument-type]
                 self.add_epsilon(cursor, frag.start)
                 cursor = frag.end
             self.add_epsilon(cursor, end)
