@@ -1,5 +1,6 @@
 from types import NoneType
 from enum import StrEnum, auto
+import json
 
 type JsonValue = JsonObject | JsonArray | str | int | float | bool | NoneType
 type JsonObject = dict[str, JsonValue]
@@ -70,12 +71,12 @@ class Scanner:
             case '"':
                 self.add_string()
             case "-":
-                if self.peek().isdigit():
+                if self.is_digit(self.peek()):
                     self.add_number()
                 else:
                     raise ValueError("- must be followed by a number")
             case _:
-                if c.isdigit():
+                if self.is_digit(c):
                     self.add_number()
                 elif c.isalpha():
                     self.add_keyword()
@@ -88,38 +89,60 @@ class Scanner:
         return c
 
     def add_string(self):
-        while self.peek() != '"' and not self.is_at_end():
-            self.advance()
-        
-        if self.is_at_end():
-            raise ValueError("Unterminated string", self.line)
-        # Consume the closing ""
-        self.advance()
+        while not self.is_at_end():
+            c = self.advance()
+            if c == '"':
+                literal = self.source[self.start : self.current]
+                try:
+                    value = json.loads(literal)
+                except json.JSONDecodeError as error:
+                    raise ValueError("Invalid string", self.line, literal) from error
+                self.tokens.append(Token(TokenType.STRING, value))
+                return
+            if c == "\\":
+                if self.is_at_end():
+                    break
+                self.advance()
+            elif ord(c) < 0x20:
+                raise ValueError("Control character in string", self.line)
 
-        self.tokens.append(
-            Token(TokenType.STRING, self.source[self.start + 1 : self.current - 1])
-        )
+        raise ValueError("Unterminated string", self.line)
 
     def add_number(self):
-        while self.peek().isdigit():
+        if self.source[self.start] == "-":
+            first_digit = self.peek()
             self.advance()
+        else:
+            first_digit = self.source[self.start]
+
+        if first_digit == "0":
+            if self.is_digit(self.peek()):
+                raise ValueError("Leading zero in number", self.line)
+        else:
+            while self.is_digit(self.peek()):
+                self.advance()
 
         if self.peek() == ".":
-            if not self.peek_next().isdigit():
+            if not self.is_digit(self.peek_next()):
                 raise ValueError("Expected digit after . (trying to parse float)")
 
             self.advance()
 
-            while self.peek().isdigit():
+            while self.is_digit(self.peek()):
                 self.advance()
 
-            self.tokens.append(
-                Token(TokenType.NUMBER, float(self.source[self.start: self.current]))
-            )
-        else:
-            self.tokens.append(
-                Token(TokenType.NUMBER, int(self.source[self.start : self.current]))
-            )
+        if self.peek() in ("e", "E"):
+            self.advance()
+            if self.peek() in ("+", "-"):
+                self.advance()
+            if not self.is_digit(self.peek()):
+                raise ValueError("Expected digit in number exponent", self.line)
+            while self.is_digit(self.peek()):
+                self.advance()
+
+        literal = self.source[self.start : self.current]
+        value = float(literal) if any(c in literal for c in ".eE") else int(literal)
+        self.tokens.append(Token(TokenType.NUMBER, value))
 
     def add_keyword(self):
         while self.peek().isalpha():
@@ -150,12 +173,12 @@ class Scanner:
 
         return self.source[self.current + 1]
 
+    def is_digit(self, c: str) -> bool:
+        return "0" <= c <= "9" if c else False
 
 
-lexer = Scanner
-lexed = lexer('{"name": "Adam"}').scan()
-
-print(lexed)
+if __name__ == "__main__":
+    lexed = Scanner('{"name": "Adam"}').scan()
+    print(lexed)
 # def parse(input: str) -> JsonValue:
 #     pass
-
