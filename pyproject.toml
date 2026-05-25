@@ -11,6 +11,7 @@ dependencies = [
     "requests",
     "python-dotenv",
     "mistralai",
+    "modal>=1.4.3",
 ]
 
 [project.scripts]
