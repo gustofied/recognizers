@@ -29,4 +29,7 @@ def chat(prompt: str) -> str:
 
 
 if __name__ == "__main__":
-    print(chat("Reply with exactly one short sentence about JSON recognizers. and give me an equation"))
+    print(chat(
+        "Reply with exactly one short sentence about JSON recognizers, "
+        "and include this equation form in the sentence: tokens = scan(json)."
+    ))
