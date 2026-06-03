@@ -30,5 +30,5 @@ def chat(prompt: str) -> str:
 
 if __name__ == "__main__":
     print(chat(
-        "write back in norwegain a short answer"
+        "write back in dansih a short answer"
     ))
