@@ -1,3 +1,5 @@
+"""JSON text scanner."""
+
 from types import NoneType
 from enum import StrEnum, auto
 import json

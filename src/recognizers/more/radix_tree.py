@@ -19,6 +19,7 @@ print(settet)
 
 def build_trie(words: set[str]):
 
+
     trie = {}
 
     for word in words:

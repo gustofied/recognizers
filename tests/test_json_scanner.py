@@ -1,6 +1,6 @@
 import unittest
 
-from recognizers.scanner import Scanner, TokenType
+from recognizers.json_scanner import Scanner, TokenType
 
 
 class ScannerTests(unittest.TestCase):
