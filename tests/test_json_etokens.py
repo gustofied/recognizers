@@ -127,6 +127,11 @@ class JsonEventTests(unittest.TestCase):
             '{"x" 1}',
             '{"x": 1} {"y": 2}',
             '{["x"]: 1}',
+            "[}",
+            "{]",
+            "[1}",
+            '{"x":1]',
+            '{"x":[}]}',
         ]
 
         for source in invalid:

@@ -9,7 +9,7 @@ from recognizers.json_ir import (
     StrSchema,
 )
 from recognizers.json_machine import validate_json
-from recognizers.json_machine_events import EventType
+from recognizers.json_machine_events import EventType, total_reward
 
 
 class JsonMachineTests(unittest.TestCase):
@@ -39,6 +39,59 @@ class JsonMachineTests(unittest.TestCase):
         self.assertEqual(machine.reward, 0)
         self.assertEqual(events[-1].event_type, EventType.ERROR)
         self.assertIn("Missing required keys", events[-1].message)
+
+    def test_emits_key_and_field_events_before_final_accept(self):
+        machine, events = validate_json('{"name":"Adam","age":31}', self.person_schema())
+
+        self.assertTrue(machine.valid)
+        self.assertEqual(
+            self.event_types(events),
+            [
+                EventType.KEY_SEEN,
+                EventType.FIELD_COMPLETE,
+                EventType.KEY_SEEN,
+                EventType.FIELD_COMPLETE,
+                EventType.OBJECT_COMPLETE,
+                EventType.VALID_COMPLETE,
+            ],
+        )
+
+    def test_rewards_required_field_completion_and_final_accept(self):
+        machine, events = validate_json('{"name":"Adam","age":31}', self.person_schema())
+
+        self.assertTrue(machine.valid)
+        self.assertEqual(total_reward(events), 3.0)
+
+    def test_field_complete_event_keeps_key_value_and_reward_separate(self):
+        _, events = validate_json('{"name":"Adam","age":31}', self.person_schema())
+        field_events = [
+            event for event in events if event.event_type == EventType.FIELD_COMPLETE
+        ]
+
+        self.assertEqual(field_events[0].value, "name")
+        self.assertEqual(field_events[0].reward, 1.0)
+
+    def test_does_not_reward_optional_field_completion(self):
+        schema = ObjSchema(
+            properties={"name": StrSchema(), "nickname": StrSchema()},
+            required={"name"},
+            additional=False,
+        )
+
+        machine, events = validate_json(
+            '{"name":"Adam","nickname":"gustofied"}',
+            schema,
+        )
+
+        self.assertTrue(machine.valid)
+        self.assertEqual(total_reward(events), 2.0)
+
+    def test_penalizes_error_event(self):
+        machine, events = validate_json('{"name":31,"age":31}', self.person_schema())
+
+        self.assertFalse(machine.valid)
+        self.assertEqual(events[-1].event_type, EventType.ERROR)
+        self.assertEqual(events[-1].reward, -1.0)
 
     def test_rejects_wrong_primitive_type(self):
         machine, events = validate_json('{"name":31,"age":31}', self.person_schema())

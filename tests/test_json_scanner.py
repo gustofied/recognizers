@@ -47,8 +47,38 @@ class ScannerTests(unittest.TestCase):
         tokens = Scanner('{"n": -3.5e-2}').scan()
         self.assertEqual(tokens[3].value, -0.035)
 
+    def test_scans_json_number_forms(self):
+        examples = {
+            "0": 0,
+            "-0": 0,
+            "12": 12,
+            "3.14": 3.14,
+            "1e10": 1e10,
+            "-3.5e-2": -0.035,
+        }
+
+        for source, value in examples.items():
+            with self.subTest(source=source):
+                tokens = Scanner(source).scan()
+
+                self.assertEqual(tokens[0].token_type, TokenType.NUMBER)
+                self.assertEqual(tokens[0].value, value)
+
+    def test_decodes_json_string_escape_forms(self):
+        tokens = Scanner(r'"\u0041\n\t\\\""').scan()
+
+        self.assertEqual(tokens[0].value, 'A\n\t\\"')
+
     def test_rejects_invalid_literals(self):
         invalid = ['{"n": 012}', '{"x": "unterminated}', '{"x": tru}']
+        for source in invalid:
+            with self.subTest(source=source):
+                with self.assertRaises(ValueError):
+                    Scanner(source).scan()
+
+    def test_rejects_invalid_json_number_forms(self):
+        invalid = ["01", "-01", "1.", "1e", "1e+", "-"]
+
         for source in invalid:
             with self.subTest(source=source):
                 with self.assertRaises(ValueError):

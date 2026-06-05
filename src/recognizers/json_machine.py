@@ -2,6 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from recognizers.json_compiler import (
+    CompiledAnySchema,
+    CompiledArrSchema,
+    CompiledBoolSchema,
+    CompiledJsonSchema,
+    CompiledNullSchema,
+    CompiledNumSchema,
+    CompiledObjSchema,
+    CompiledSchema,
+    CompiledStrSchema,
+    bit_for,
+)
 from recognizers.json_etokens import EToken, ETokenType, OTHER_KEY, scan_etokens
 from recognizers.json_ir import (
     AnySchema,
@@ -18,24 +30,31 @@ from recognizers.json_machine_events import Event, EventType
 
 @dataclass
 class ArrayFrame:
-    schema: ArrSchema | AnySchema
+    schema: ArrSchema | AnySchema | CompiledArrSchema | CompiledAnySchema
 
 
 @dataclass
 class ObjectFrame:
-    schema: ObjSchema | AnySchema
+    schema: ObjSchema | AnySchema | CompiledObjSchema | CompiledAnySchema
     seen_keys: set[str] = field(default_factory=set)
     completed_keys: set[str] = field(default_factory=set)
-    current_key: str | None = None
+    seen_mask: int = 0
+    completed_mask: int = 0
+    current_key: str | int | None = None
 
 
 Frame = ArrayFrame | ObjectFrame
 
 
 class JsonSchemaMachine:
-    def __init__(self, schema: Schema):
+    def __init__(
+        self,
+        schema: Schema | CompiledSchema,
+        key_names: tuple[str, ...] = (),
+    ):
         self.root_schema = schema
-        self.value_expected: Schema | None = schema
+        self.value_expected: Schema | CompiledSchema | None = schema
+        self.key_names = key_names
         self.stack: list[Frame] = []
         self.complete = False
         self.valid = False
@@ -75,9 +94,9 @@ class JsonSchemaMachine:
 
     def open_object(self) -> list[Event]:
         schema = self.expected_value_schema()
-        if isinstance(schema, AnySchema):
+        if isinstance(schema, AnySchema | CompiledAnySchema):
             self.stack.append(ObjectFrame(schema))
-        elif isinstance(schema, ObjSchema):
+        elif isinstance(schema, ObjSchema | CompiledObjSchema):
             self.stack.append(ObjectFrame(schema))
         else:
             return self.fail(f"Expected {schema_name(schema)}, got object")
@@ -95,6 +114,12 @@ class JsonSchemaMachine:
             missing = frame.schema.required - frame.completed_keys
             if missing:
                 return self.fail(f"Missing required keys: {sorted(missing)}")
+        elif isinstance(frame.schema, CompiledObjSchema):
+            missing_mask = frame.schema.required_mask & ~frame.completed_mask
+            if missing_mask:
+                return self.fail(
+                    f"Missing required keys: {self.names_for_mask(missing_mask)}"
+                )
 
         events.append(Event(EventType.OBJECT_COMPLETE, "Object complete"))
         events.extend(self.complete_value())
@@ -102,9 +127,9 @@ class JsonSchemaMachine:
 
     def open_array(self) -> list[Event]:
         schema = self.expected_value_schema()
-        if isinstance(schema, AnySchema):
+        if isinstance(schema, AnySchema | CompiledAnySchema):
             self.stack.append(ArrayFrame(schema))
-        elif isinstance(schema, ArrSchema):
+        elif isinstance(schema, ArrSchema | CompiledArrSchema):
             self.stack.append(ArrayFrame(schema))
         else:
             return self.fail(f"Expected {schema_name(schema)}, got array")
@@ -123,6 +148,9 @@ class JsonSchemaMachine:
         frame = self.top_frame()
         if not isinstance(frame, ObjectFrame):
             return self.fail("Object key outside object", key)
+
+        if isinstance(frame.schema, CompiledAnySchema | CompiledObjSchema):
+            return self.accept_compiled_key(frame, key)
 
         if key is not OTHER_KEY:
             if not isinstance(key, str):
@@ -144,6 +172,26 @@ class JsonSchemaMachine:
         self.value_expected = value_schema
         return [Event(EventType.KEY_SEEN, f"Key seen: {key!r}", key)]
 
+    def accept_compiled_key(self, frame: ObjectFrame, key: object) -> list[Event]:
+        if isinstance(key, int):
+            key_bit = bit_for(key)
+            if frame.seen_mask & key_bit:
+                return self.fail(f"Duplicate object key: {self.key_name(key)!r}", key)
+            frame.seen_mask |= key_bit
+        elif key is not OTHER_KEY:
+            return self.fail("Expected compiled key id", key)
+
+        if (
+            isinstance(frame.schema, CompiledObjSchema)
+            and not frame.schema.additional
+            and (not isinstance(key, int) or key not in frame.schema.properties)
+        ):
+            return self.fail(f"Unknown key not allowed: {self.key_name(key)!r}", key)
+
+        frame.current_key = key if isinstance(key, int) else None
+        self.value_expected = self.schema_for_key(frame, key)
+        return [Event(EventType.KEY_SEEN, f"Key seen: {self.key_name(key)!r}", key)]
+
     def accept_primitive(self, etoken: EToken) -> list[Event]:
         schema = self.expected_value_schema()
         if not self.matches_primitive(schema, etoken):
@@ -154,38 +202,52 @@ class JsonSchemaMachine:
 
         return self.complete_value(etoken.value)
 
-    def schema_for_key(self, frame: ObjectFrame, key: object) -> Schema:
+    def schema_for_key(self, frame: ObjectFrame, key: object) -> Schema | CompiledSchema:
         if isinstance(frame.schema, AnySchema):
             return AnySchema()
+        if isinstance(frame.schema, CompiledAnySchema):
+            return CompiledAnySchema()
 
         if isinstance(key, str) and key in frame.schema.properties:
             return frame.schema.properties[key]
+        if (
+            isinstance(frame.schema, CompiledObjSchema)
+            and isinstance(key, int)
+            and key in frame.schema.properties
+        ):
+            return frame.schema.properties[key]
 
         if frame.schema.additional:
+            if isinstance(frame.schema, CompiledObjSchema):
+                return CompiledAnySchema()
             return AnySchema()
 
         return AnySchema()
 
-    def expected_value_schema(self) -> Schema:
+    def expected_value_schema(self) -> Schema | CompiledSchema:
         if self.value_expected is not None:
             return self.value_expected
 
         frame = self.top_frame()
         if isinstance(frame, ArrayFrame):
-            return frame.schema.item if isinstance(frame.schema, ArrSchema) else AnySchema()
+            if isinstance(frame.schema, ArrSchema | CompiledArrSchema):
+                return frame.schema.item
+            if isinstance(frame.schema, CompiledAnySchema):
+                return CompiledAnySchema()
+            return AnySchema()
 
         return AnySchema()
 
-    def matches_primitive(self, schema: Schema, etoken: EToken) -> bool:
-        if isinstance(schema, AnySchema):
+    def matches_primitive(self, schema: Schema | CompiledSchema, etoken: EToken) -> bool:
+        if isinstance(schema, AnySchema | CompiledAnySchema):
             return True
-        if isinstance(schema, StrSchema):
+        if isinstance(schema, StrSchema | CompiledStrSchema):
             return etoken.token_type == ETokenType.JSTR
-        if isinstance(schema, NumSchema):
+        if isinstance(schema, NumSchema | CompiledNumSchema):
             return etoken.token_type == ETokenType.JNUM
-        if isinstance(schema, BoolSchema):
+        if isinstance(schema, BoolSchema | CompiledBoolSchema):
             return etoken.token_type in {ETokenType.TRUE, ETokenType.FALSE}
-        if isinstance(schema, NullSchema):
+        if isinstance(schema, NullSchema | CompiledNullSchema):
             return etoken.token_type == ETokenType.NULL
         return False
 
@@ -197,18 +259,36 @@ class JsonSchemaMachine:
             self.complete = True
             self.valid = True
             self.value_expected = None
-            return [Event(EventType.VALID_COMPLETE, "JSON value satisfies schema", value)]
+            return [
+                Event(
+                    EventType.VALID_COMPLETE,
+                    "JSON value satisfies schema",
+                    value,
+                    reward=1.0,
+                )
+            ]
 
         if isinstance(parent, ArrayFrame):
             self.value_expected = None
             return [Event(EventType.ARRAY_ELEMENT_COMPLETE, "Array element complete", value)]
 
         key = parent.current_key
-        if key is not None:
+        reward = self.field_reward(parent, key)
+        if isinstance(parent.schema, CompiledObjSchema) and isinstance(key, int):
+            parent.completed_mask |= bit_for(key)
+        elif key is not None:
             parent.completed_keys.add(key)
         parent.current_key = None
         self.value_expected = None
-        events.append(Event(EventType.FIELD_COMPLETE, f"Field complete: {key!r}", key))
+        key_display = self.key_name(key)
+        events.append(
+            Event(
+                EventType.FIELD_COMPLETE,
+                f"Field complete: {key_display!r}",
+                key,
+                reward=reward,
+            )
+        )
         return events
 
     def top_frame(self) -> Frame | None:
@@ -224,7 +304,28 @@ class JsonSchemaMachine:
     def fail(self, message: str, value: object = None) -> list[Event]:
         self.failed = True
         self.valid = False
-        return [Event(EventType.ERROR, message, value)]
+        return [Event(EventType.ERROR, message, value, reward=-1.0)]
+
+    def field_reward(self, frame: ObjectFrame, key: str | int | None) -> float:
+        if key is None:
+            return 0.0
+        if isinstance(frame.schema, ObjSchema):
+            return 1.0 if isinstance(key, str) and key in frame.schema.required else 0.0
+        if isinstance(frame.schema, CompiledObjSchema):
+            return (
+                1.0
+                if isinstance(key, int) and frame.schema.required_mask & bit_for(key)
+                else 0.0
+            )
+        return 0.0
+
+    def key_name(self, key: object) -> object:
+        if isinstance(key, int) and key < len(self.key_names):
+            return self.key_names[key]
+        return key
+
+    def names_for_mask(self, mask: int) -> list[str]:
+        return [name for key_id, name in enumerate(self.key_names) if mask & bit_for(key_id)]
 
 
 def validate_json(source: str, schema: Schema) -> tuple[JsonSchemaMachine, list[Event]]:
@@ -233,10 +334,36 @@ def validate_json(source: str, schema: Schema) -> tuple[JsonSchemaMachine, list[
 
     # First prototype intentionally uses string keys. json_compiler.py will switch
     # this path to integer key IDs and bit masks later.
-    for etoken in scan_etokens(source, key_mapper=lambda key: key):
-        events.extend(machine.accept(etoken))
-        if machine.failed:
-            break
+    try:
+        for etoken in scan_etokens(source, key_mapper=lambda key: key):
+            events.extend(machine.accept(etoken))
+            if machine.failed:
+                break
+    except ValueError as error:
+        events.extend(machine.fail(str(error)))
+        return machine, events
+
+    if not machine.complete and not machine.failed:
+        events.extend(machine.fail("Incomplete JSON value"))
+
+    return machine, events
+
+
+def validate_json_compiled(
+    source: str,
+    compiled: CompiledJsonSchema,
+) -> tuple[JsonSchemaMachine, list[Event]]:
+    machine = JsonSchemaMachine(compiled.root, key_names=compiled.key_table.keys)
+    events: list[Event] = []
+
+    try:
+        for etoken in scan_etokens(source, key_mapper=compiled.key_mapper):
+            events.extend(machine.accept(etoken))
+            if machine.failed:
+                break
+    except ValueError as error:
+        events.extend(machine.fail(str(error)))
+        return machine, events
 
     if not machine.complete and not machine.failed:
         events.extend(machine.fail("Incomplete JSON value"))
@@ -245,4 +372,4 @@ def validate_json(source: str, schema: Schema) -> tuple[JsonSchemaMachine, list[
 
 
 def schema_name(schema: Schema) -> str:
-    return type(schema).__name__.removesuffix("Schema")
+    return type(schema).__name__.removeprefix("Compiled").removesuffix("Schema")
