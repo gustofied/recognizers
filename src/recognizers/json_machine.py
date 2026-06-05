@@ -25,6 +25,7 @@ class ArrayFrame:
 class ObjectFrame:
     schema: ObjSchema | AnySchema
     seen_keys: set[str] = field(default_factory=set)
+    completed_keys: set[str] = field(default_factory=set)
     current_key: str | None = None
 
 
@@ -91,7 +92,7 @@ class JsonSchemaMachine:
 
         events: list[Event] = []
         if isinstance(frame.schema, ObjSchema):
-            missing = frame.schema.required - frame.seen_keys
+            missing = frame.schema.required - frame.completed_keys
             if missing:
                 return self.fail(f"Missing required keys: {sorted(missing)}")
 
@@ -203,6 +204,8 @@ class JsonSchemaMachine:
             return [Event(EventType.ARRAY_ELEMENT_COMPLETE, "Array element complete", value)]
 
         key = parent.current_key
+        if key is not None:
+            parent.completed_keys.add(key)
         parent.current_key = None
         self.value_expected = None
         events.append(Event(EventType.FIELD_COMPLETE, f"Field complete: {key!r}", key))
@@ -228,7 +231,9 @@ def validate_json(source: str, schema: Schema) -> tuple[JsonSchemaMachine, list[
     machine = JsonSchemaMachine(schema)
     events: list[Event] = []
 
-    for etoken in scan_etokens(source):
+    # First prototype intentionally uses string keys. json_compiler.py will switch
+    # this path to integer key IDs and bit masks later.
+    for etoken in scan_etokens(source, key_mapper=lambda key: key):
         events.extend(machine.accept(etoken))
         if machine.failed:
             break

@@ -34,6 +34,8 @@ machine, events = validate_json('{"name":"Adam","age":31}', schema)
 print(machine.valid, machine.reward)
 ```
 
+This first machine intentionally uses string keys. The next compiler layer will convert schema keys into integer IDs and bit masks, which is the version that starts looking like the paper's JSON automata.
+
 Eventually, the automaton should be constructed directly from the schema, not written by hand.
 
 Once you have that, three things follow. You can validate documents symbol by symbol as they stream in, without loading the whole thing first. You can generate valid documents from the schema, which gives you training data for free. And you can use the automaton as a reward signal: the model produces a tool call, the automaton checks if it matches the schema, and that yes or no is the reward. The same schema you already write to define a tool becomes the thing that trains the model on it.
